@@ -18,7 +18,9 @@ package mysql
 
 import (
 	"bytes"
+	ylog "dreamland/lib/log"
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"os/signal"
@@ -206,11 +208,21 @@ func (a *AuthServerStatic) Salt() ([]byte, error) {
 
 // ValidateHash is part of the AuthServer interface.
 func (a *AuthServerStatic) ValidateHash(salt []byte, user string, authResponse []byte, remoteAddr net.Addr) (Getter, error) {
+	// add login log recar
+	connMessage := &ylog.ConnMessage{
+		SrcIp:    remoteAddr.String(),
+		Service:  "mysql",
+		Protocol: "tcp",
+	}
 	a.mu.Lock()
 	entries, ok := a.entries[user]
 	a.mu.Unlock()
 
 	if !ok {
+		connMessage.ToMessage(&ylog.Message{
+			Type: ylog.LOGIN,
+			Msg:  fmt.Sprintf("user:%s/password:%s", user, ""),
+		})
 		return &StaticUserData{}, NewSQLError(ERAccessDeniedError, SSAccessDeniedError, "Access denied for user '%v'", user)
 	}
 
@@ -224,7 +236,16 @@ func (a *AuthServerStatic) ValidateHash(salt []byte, user string, authResponse [
 			computedAuthResponse := ScramblePassword(salt, []byte(entry.Password))
 			// Validate the password.
 			if matchSourceHost(remoteAddr, entry.SourceHost) && bytes.Equal(authResponse, computedAuthResponse) {
+				connMessage.ToMessage(&ylog.Message{
+					Type: ylog.LOGINSUCCESS,
+					Msg:  fmt.Sprintf("user:%s/password:%s", user, entry.Password),
+				})
 				return &StaticUserData{entry.UserData, entry.Groups}, nil
+			} else {
+				connMessage.ToMessage(&ylog.Message{
+					Type: ylog.LOGIN,
+					Msg:  fmt.Sprintf("user:%s/password:%s", user, ""),
+				})
 			}
 		}
 	}
